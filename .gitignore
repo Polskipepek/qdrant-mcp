@@ -1,4 +1,5 @@
 **/node_modules/**
 **/dist/**
 mcp-server/qdrant_storage/**
+.env
 *.js.map
