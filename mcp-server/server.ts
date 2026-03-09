@@ -42,17 +42,18 @@ server.registerTool(
     inputSchema: {},
   },
   async () => {
-    const result = await client.getCollections();
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(result, null, 2),
-        },
-      ],
-      structuredContent: result,
-    };
+    try {
+      const result = await client.getCollections();
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: "text", text: `Error: ${message}` }],
+        isError: true,
+      };
+    }
   },
 );
 
