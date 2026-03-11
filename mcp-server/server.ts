@@ -26,7 +26,9 @@ async function embed(text: string): Promise<number[]> {
     body: JSON.stringify({ model: EMBEDDING_MODEL, prompt: text }),
   });
   if (!response.ok) {
-    throw new Error(`Ollama embed failed: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `Ollama embed failed: ${response.status} ${await response.text()}`,
+    );
   }
   const json = (await response.json()) as { embedding: number[] };
   return json.embedding;
@@ -49,7 +51,9 @@ async function generate(context: string, question: string): Promise<string> {
     body: JSON.stringify({ model: CHAT_MODEL, prompt, stream: false }),
   });
   if (!response.ok) {
-    throw new Error(`Ollama generate failed: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `Ollama generate failed: ${response.status} ${await response.text()}`,
+    );
   }
   const json = (await response.json()) as { response: string };
   return json.response;
@@ -82,10 +86,10 @@ server.registerTool(
   },
   async () => {
     try {
-      const info = await qdrant.getInfo();
+      const collections = await qdrant.getCollections();
       return {
-        content: [{ type: "text", text: JSON.stringify(info, null, 2) }],
-        structuredContent: info,
+        content: [{ type: "text", text: JSON.stringify(collections, null, 2) }],
+        structuredContent: collections,
       };
     } catch (err) {
       return toolError(err);
@@ -156,10 +160,19 @@ server.registerTool(
         content: [
           {
             type: "text",
-            text: JSON.stringify({ ok: result, name, size, distance: distance ?? "Cosine" }, null, 2),
+            text: JSON.stringify(
+              { ok: result, name, size, distance: distance ?? "Cosine" },
+              null,
+              2,
+            ),
           },
         ],
-        structuredContent: { ok: result, name, size, distance: distance ?? "Cosine" },
+        structuredContent: {
+          ok: result,
+          name,
+          size,
+          distance: distance ?? "Cosine",
+        },
       };
     } catch (err) {
       return toolError(err);
@@ -180,7 +193,12 @@ server.registerTool(
     try {
       const result = await qdrant.deleteCollection(name);
       return {
-        content: [{ type: "text", text: JSON.stringify({ ok: result, deleted: name }, null, 2) }],
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ ok: result, deleted: name }, null, 2),
+          },
+        ],
         structuredContent: { ok: result, deleted: name },
       };
     } catch (err) {
@@ -202,7 +220,7 @@ server.registerTool(
       collection: z.string().min(1),
       text: z.string().min(1),
       chunkSize: z.number().int().positive().optional(),
-      metadata: z.record(z.string()).optional(),
+      metadata: z.record(z.string(), z.any()).optional(),
     },
   },
   async ({ collection, text, chunkSize = 500, metadata = {} }) => {
@@ -263,14 +281,19 @@ server.registerTool(
       const results = await qdrant.search(collection, {
         vector,
         limit: topK,
-        withPayload: true,
+        with_payload: true,
       });
 
-      const formatted = results.map((r, i) => `[${i + 1}] score=${r.score.toFixed(4)}\n${r.payload?.["text"] ?? ""}`).join("\n\n");
+      const formatted = results
+        .map(
+          (r, i) =>
+            `[${i + 1}] score=${r.score.toFixed(4)}\n${r.payload?.["text"] ?? ""}`,
+        )
+        .join("\n\n");
 
       return {
         content: [{ type: "text", text: formatted || "No results found." }],
-        structuredContent: results,
+        structuredContent: { results },
       };
     } catch (err) {
       return toolError(err);
@@ -298,7 +321,7 @@ server.registerTool(
       const results = await qdrant.search(collection, {
         vector,
         limit: topK,
-        withPayload: true,
+        with_payload: true,
       });
 
       const context = results
@@ -307,7 +330,12 @@ server.registerTool(
 
       if (!context) {
         return {
-          content: [{ type: "text", text: "No relevant context found in the collection." }],
+          content: [
+            {
+              type: "text",
+              text: "No relevant context found in the collection.",
+            },
+          ],
         };
       }
 
