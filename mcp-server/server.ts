@@ -272,7 +272,7 @@ server.registerTool(
           const r = (point.payload as Record<string, unknown>)["repo"];
           if (typeof r === "string") seen.add(r);
         }
-        offset = page.next_page_offset ?? null;
+        offset = (page.next_page_offset as string | number | null) ?? null;
       } while (offset !== null);
 
       const repos = Array.from(seen).sort();
@@ -436,7 +436,7 @@ server.registerTool(
 
       return {
         content: [{ type: "text", text: formatted }],
-        structuredContent: results,
+        structuredContent: { results } as Record<string, unknown>,
       };
     } catch (err) {
       return toolError(err);
