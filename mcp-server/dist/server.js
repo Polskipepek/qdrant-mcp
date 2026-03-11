@@ -9,12 +9,13 @@ const QDRANT_URL = process.env.QDRANT_URL ?? "http://localhost:6333";
 const OLLAMA_URL = process.env.OLLAMA_URL ?? "http://localhost:11434";
 const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL ?? "nomic-embed-text";
 const CHAT_MODEL = process.env.CHAT_MODEL ?? "llama3.2";
+const COLLECTION_NAME = process.env.COLLECTION_NAME ?? "codebase";
+const VECTOR_SIZE = parseInt(process.env.VECTOR_SIZE ?? "768", 10);
 const SEARCH_TOP_K = parseInt(process.env.SEARCH_TOP_K ?? "5", 10);
 const qdrant = new QdrantClient({ url: QDRANT_URL });
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-/** Call Ollama /api/embeddings and return the embedding vector. */
 async function embed(text) {
     const response = await fetch(`${OLLAMA_URL}/api/embeddings`, {
         method: "POST",
@@ -27,10 +28,9 @@ async function embed(text) {
     const json = (await response.json());
     return json.embedding;
 }
-/** Call Ollama /api/generate with a context string and user question. */
 async function generate(context, question) {
     const prompt = [
-        "You are a helpful assistant. Use only the context below to answer the question.",
+        "You are a helpful assistant. Answer based only on the context below.",
         "",
         "CONTEXT:",
         context,
@@ -48,6 +48,33 @@ async function generate(context, question) {
     const json = (await response.json());
     return json.response;
 }
+/**
+ * Ensure the shared collection exists with the correct vector config
+ * and payload indexes on 'repo' and 'source' for fast filtered queries.
+ */
+async function ensureCollection() {
+    const collections = await qdrant.getCollections();
+    const exists = collections.collections.some((c) => c.name === COLLECTION_NAME);
+    if (!exists) {
+        await qdrant.createCollection(COLLECTION_NAME, {
+            vectors: { size: VECTOR_SIZE, distance: "Cosine" },
+        });
+        // Index the fields we filter on — critical for performance at scale.
+        // Without these indexes Qdrant does a full scan on every filtered query.
+        await qdrant.createPayloadIndex(COLLECTION_NAME, {
+            field_name: "repo",
+            field_schema: "keyword",
+        });
+        await qdrant.createPayloadIndex(COLLECTION_NAME, {
+            field_name: "source",
+            field_schema: "keyword",
+        });
+        await qdrant.createPayloadIndex(COLLECTION_NAME, {
+            field_name: "language",
+            field_schema: "keyword",
+        });
+    }
+}
 function toolError(err) {
     const message = err instanceof Error ? err.message : String(err);
     return {
@@ -55,12 +82,28 @@ function toolError(err) {
         isError: true,
     };
 }
+/**
+ * Build a Qdrant filter that optionally scopes results to a single repo.
+ * When repo is undefined the filter is omitted so all repos are searched.
+ */
+function repoFilter(repo) {
+    if (!repo)
+        return undefined;
+    return {
+        must: [
+            {
+                key: "repo",
+                match: { value: repo },
+            },
+        ],
+    };
+}
 // ---------------------------------------------------------------------------
 // Server
 // ---------------------------------------------------------------------------
 const server = new McpServer({
     name: "qdrant-mcp",
-    version: "1.0.0",
+    version: "2.0.0",
 });
 // ── Health ──────────────────────────────────────────────────────────────────
 server.registerTool("qdrant_health", {
@@ -85,17 +128,15 @@ server.registerTool("ollama_health", {
     inputSchema: {},
 }, async () => {
     try {
-        const response = await fetch(`${OLLAMA_URL}`);
+        const response = await fetch(OLLAMA_URL);
         const text = await response.text();
-        return {
-            content: [{ type: "text", text }],
-        };
+        return { content: [{ type: "text", text }] };
     }
     catch (err) {
         return toolError(err);
     }
 });
-// ── Collections ─────────────────────────────────────────────────────────────
+// ── Collection management ────────────────────────────────────────────────────
 server.registerTool("qdrant_list_collections", {
     title: "List Qdrant collections",
     description: "Return all collections stored in Qdrant",
@@ -114,7 +155,7 @@ server.registerTool("qdrant_list_collections", {
 });
 server.registerTool("qdrant_create_collection", {
     title: "Create Qdrant collection",
-    description: "Create a named vector collection. The 'size' must match the embedding model output dimension (nomic-embed-text = 768, llama3.2 = 3072).",
+    description: "Create a named vector collection. 'size' must match embedding model output (nomic-embed-text = 768).",
     inputSchema: {
         name: z.string().min(1),
         size: z.number().int().positive(),
@@ -129,15 +170,10 @@ server.registerTool("qdrant_create_collection", {
             content: [
                 {
                     type: "text",
-                    text: JSON.stringify({ ok: result, name, size, distance: distance ?? "Cosine" }, null, 2),
+                    text: JSON.stringify({ ok: result, name, size }, null, 2),
                 },
             ],
-            structuredContent: {
-                ok: result,
-                name,
-                size,
-                distance: distance ?? "Cosine",
-            },
+            structuredContent: { ok: result, name, size },
         };
     }
     catch (err) {
@@ -147,9 +183,7 @@ server.registerTool("qdrant_create_collection", {
 server.registerTool("qdrant_delete_collection", {
     title: "Delete Qdrant collection",
     description: "Permanently delete a collection and all its vectors",
-    inputSchema: {
-        name: z.string().min(1),
-    },
+    inputSchema: { name: z.string().min(1) },
 }, async ({ name }) => {
     try {
         const result = await qdrant.deleteCollection(name);
@@ -167,22 +201,71 @@ server.registerTool("qdrant_delete_collection", {
         return toolError(err);
     }
 });
+// ── Repo listing ─────────────────────────────────────────────────────────────
+server.registerTool("rag_list_repos", {
+    title: "List ingested repos",
+    description: "Return distinct repo names that have been ingested into the shared collection. " +
+        "Use the returned names as the 'repo' filter in rag_search and rag_ask.",
+    inputSchema: {},
+}, async () => {
+    try {
+        await ensureCollection();
+        // Scroll through all points requesting only the 'repo' payload field
+        const seen = new Set();
+        let offset = null;
+        do {
+            const page = await qdrant.scroll(COLLECTION_NAME, {
+                limit: 250,
+                offset: offset ?? undefined,
+                with_payload: ["repo"],
+                with_vector: false,
+            });
+            for (const point of page.points) {
+                const r = point.payload["repo"];
+                if (typeof r === "string")
+                    seen.add(r);
+            }
+            offset = page.next_page_offset ?? null;
+        } while (offset !== null);
+        const repos = Array.from(seen).sort();
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: repos.length ? repos.join("\n") : "No repos ingested yet.",
+                },
+            ],
+            structuredContent: { repos },
+        };
+    }
+    catch (err) {
+        return toolError(err);
+    }
+});
 // ── RAG — Ingest ─────────────────────────────────────────────────────────────
 server.registerTool("rag_ingest", {
-    title: "Ingest text into RAG",
-    description: "Split text into chunks, embed each chunk with Ollama, and upsert into a Qdrant collection. " +
-        "The collection must already exist with a vector size matching the embedding model.",
+    title: "Ingest text into the shared RAG collection",
+    description: "Chunk text, embed with Ollama, and upsert into the shared Qdrant collection. " +
+        "Always supply 'repo' (e.g. 'my-api') and 'source' (file path or URL) so results can be filtered later.",
     inputSchema: {
-        collection: z.string().min(1),
         text: z.string().min(1),
+        repo: z
+            .string()
+            .min(1)
+            .describe("Repository or project name, e.g. 'bb-pay'"),
+        source: z.string().min(1).describe("File path or URL the text came from"),
+        language: z
+            .string()
+            .optional()
+            .describe("Programming language or doc type, e.g. 'csharp', 'markdown'"),
+        branch: z.string().optional().describe("Git branch name"),
         chunkSize: z.number().int().positive().optional(),
-        metadata: z.record(z.string(), z.any()).optional(),
     },
-}, async ({ collection, text, chunkSize = 500, metadata = {} }) => {
+}, async ({ text, repo, source, language, branch, chunkSize = 500 }) => {
     try {
-        // Split text into overlapping chunks
-        const chunks = [];
+        await ensureCollection();
         const overlap = Math.floor(chunkSize * 0.1);
+        const chunks = [];
         for (let i = 0; i < text.length; i += chunkSize - overlap) {
             const chunk = text.slice(i, i + chunkSize).trim();
             if (chunk.length > 0)
@@ -193,18 +276,51 @@ server.registerTool("rag_ingest", {
             return {
                 id: Date.now() * 1000 + index,
                 vector,
-                payload: { text: chunk, ...metadata },
+                payload: {
+                    text: chunk,
+                    repo,
+                    source,
+                    ...(language ? { language } : {}),
+                    ...(branch ? { branch } : {}),
+                },
             };
         }));
-        await qdrant.upsert(collection, { wait: true, points });
+        await qdrant.upsert(COLLECTION_NAME, { wait: true, points });
         return {
             content: [
                 {
                     type: "text",
-                    text: `Ingested ${points.length} chunks into collection '${collection}'.`,
+                    text: `Ingested ${points.length} chunks from '${source}' (repo: ${repo}).`,
                 },
             ],
-            structuredContent: { ingested: points.length, collection },
+            structuredContent: { ingested: points.length, repo, source },
+        };
+    }
+    catch (err) {
+        return toolError(err);
+    }
+});
+// ── RAG — Delete repo ────────────────────────────────────────────────────────
+server.registerTool("rag_delete_repo", {
+    title: "Delete all vectors for a repo",
+    description: "Remove all ingested chunks for a specific repo from the shared collection.",
+    inputSchema: {
+        repo: z.string().min(1),
+    },
+}, async ({ repo }) => {
+    try {
+        await ensureCollection();
+        await qdrant.delete(COLLECTION_NAME, {
+            wait: true,
+            filter: {
+                must: [{ key: "repo", match: { value: repo } }],
+            },
+        });
+        return {
+            content: [
+                { type: "text", text: `Deleted all vectors for repo '${repo}'.` },
+            ],
+            structuredContent: { deleted: true, repo },
         };
     }
     catch (err) {
@@ -214,25 +330,36 @@ server.registerTool("rag_ingest", {
 // ── RAG — Search ─────────────────────────────────────────────────────────────
 server.registerTool("rag_search", {
     title: "Semantic search",
-    description: "Embed a query with Ollama and return the top-K most similar chunks from a Qdrant collection.",
+    description: "Embed a query and return the top-K most similar chunks from the shared collection. " +
+        "Optionally filter to a single repo. Leave 'repo' empty to search across all repos.",
     inputSchema: {
-        collection: z.string().min(1),
         query: z.string().min(1),
+        repo: z
+            .string()
+            .optional()
+            .describe("Scope search to this repo only. Omit to search all repos."),
         topK: z.number().int().positive().optional(),
     },
-}, async ({ collection, query, topK = SEARCH_TOP_K }) => {
+}, async ({ query, repo, topK = SEARCH_TOP_K }) => {
     try {
         const vector = await embed(query);
-        const results = await qdrant.search(collection, {
+        const results = await qdrant.search(COLLECTION_NAME, {
             vector,
             limit: topK,
             with_payload: true,
+            filter: repoFilter(repo),
         });
+        if (results.length === 0) {
+            return { content: [{ type: "text", text: "No results found." }] };
+        }
         const formatted = results
-            .map((r, i) => `[${i + 1}] score=${r.score.toFixed(4)}\n${r.payload?.["text"] ?? ""}`)
+            .map((r, i) => {
+            const p = r.payload;
+            return `[${i + 1}] score=${r.score.toFixed(4)} | repo=${p["repo"]} | ${p["source"]}\n${p["text"]}`;
+        })
             .join("\n\n");
         return {
-            content: [{ type: "text", text: formatted || "No results found." }],
+            content: [{ type: "text", text: formatted }],
             structuredContent: { results },
         };
     }
@@ -242,25 +369,27 @@ server.registerTool("rag_search", {
 });
 // ── RAG — Ask ────────────────────────────────────────────────────────────────
 server.registerTool("rag_ask", {
-    title: "Ask a question using RAG",
-    description: "Embed the question, retrieve relevant chunks from Qdrant, then generate an answer using the local Ollama Llama model.",
+    title: "Ask a question using local RAG",
+    description: "Retrieve relevant chunks from the shared collection, then generate an answer with the local Llama model. " +
+        "Optionally scope retrieval to a single repo.",
     inputSchema: {
-        collection: z.string().min(1),
         question: z.string().min(1),
+        repo: z
+            .string()
+            .optional()
+            .describe("Scope context retrieval to this repo. Omit to search all repos."),
         topK: z.number().int().positive().optional(),
     },
-}, async ({ collection, question, topK = SEARCH_TOP_K }) => {
+}, async ({ question, repo, topK = SEARCH_TOP_K }) => {
     try {
         const vector = await embed(question);
-        const results = await qdrant.search(collection, {
+        const results = await qdrant.search(COLLECTION_NAME, {
             vector,
             limit: topK,
             with_payload: true,
+            filter: repoFilter(repo),
         });
-        const context = results
-            .map((r, i) => `[${i + 1}] ${r.payload?.["text"] ?? ""}`)
-            .join("\n\n");
-        if (!context) {
+        if (results.length === 0) {
             return {
                 content: [
                     {
@@ -270,6 +399,12 @@ server.registerTool("rag_ask", {
                 ],
             };
         }
+        const context = results
+            .map((r, i) => {
+            const p = r.payload;
+            return `[${i + 1}] (${p["repo"]} / ${p["source"]})\n${p["text"]}`;
+        })
+            .join("\n\n");
         const answer = await generate(context, question);
         return {
             content: [{ type: "text", text: answer }],

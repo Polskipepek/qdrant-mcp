@@ -1,4 +1,5 @@
 #!/usr/bin/env tsx
+/// <reference types="node" />
 /**
  * CLI ingest script — called by git hooks and manually.
  *
@@ -7,8 +8,9 @@
  *   tsx scripts/ingest.ts --dir /path/to/repo --repo my-api --ext .cs,.ts,.md
  *   tsx scripts/ingest.ts --file /path/to/file.ts --repo my-api
  */
-import { readFileSync, readdirSync, statSync, existsSync } from "fs";
-import { resolve, relative, extname, join } from "path";
+import { readFileSync, readdirSync, statSync } from "fs";
+import { resolve, extname, join } from "path";
+import { execSync } from "child_process";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -23,15 +25,33 @@ const OVERLAP = Math.floor(CHUNK_SIZE * 0.1);
 
 // Default extensions to ingest — matches common .NET + React project files
 const DEFAULT_EXTENSIONS = new Set([
-  ".cs", ".ts", ".tsx", ".js", ".jsx",
-  ".md", ".txt", ".json", ".yaml", ".yml",
-  ".sql", ".csproj", ".sln",
+  ".cs",
+  ".ts",
+  ".tsx",
+  ".js",
+  ".jsx",
+  ".md",
+  ".txt",
+  ".json",
+  ".yaml",
+  ".yml",
+  ".sql",
+  ".csproj",
+  ".sln",
 ]);
 
 // Directories to always skip
 const IGNORE_DIRS = new Set([
-  "node_modules", "dist", "bin", "obj", ".git",
-  ".next", ".expo", "coverage", ".vs", "__pycache__",
+  "node_modules",
+  "dist",
+  "bin",
+  "obj",
+  ".git",
+  ".next",
+  ".expo",
+  "coverage",
+  ".vs",
+  "__pycache__",
 ]);
 
 // ---------------------------------------------------------------------------
@@ -51,8 +71,9 @@ const branch = arg("--branch") ?? currentBranch();
 
 function currentBranch(): string {
   try {
-    const { execSync } = await import("child_process") as typeof import("child_process");
-    return execSync("git rev-parse --abbrev-ref HEAD", { encoding: "utf8" }).trim();
+    return execSync("git rev-parse --abbrev-ref HEAD", {
+      encoding: "utf8",
+    }).trim();
   } catch {
     return "unknown";
   }
@@ -68,7 +89,12 @@ if (!targetDir && !targetFile) {
 }
 
 const allowedExts = extArg
-  ? new Set(extArg.split(",").map((e) => e.trim()))
+  ? new Set(
+      extArg.split(",").map((e) => {
+        const t = e.trim().toLowerCase();
+        return t.startsWith(".") ? t : `.${t}`;
+      }),
+    )
   : DEFAULT_EXTENSIONS;
 
 // ---------------------------------------------------------------------------
@@ -92,7 +118,9 @@ async function ensureCollection(): Promise<void> {
   await fetch(`${QDRANT_URL}/collections/${COLLECTION_NAME}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ vectors: { size: VECTOR_SIZE, distance: "Cosine" } }),
+    body: JSON.stringify({
+      vectors: { size: VECTOR_SIZE, distance: "Cosine" },
+    }),
   });
 
   for (const field of ["repo", "source", "language"]) {
@@ -133,17 +161,27 @@ async function ingestFile(filePath: string): Promise<number> {
       return {
         id: Date.now() * 1000 + index,
         vector,
-        payload: { text: chunk, repo: repoName!, source, language: ext, branch },
+        payload: {
+          text: chunk,
+          repo: repoName!,
+          source,
+          language: ext,
+          branch,
+        },
       };
     }),
   );
 
-  const res = await fetch(`${QDRANT_URL}/collections/${COLLECTION_NAME}/points`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ wait: true, points }),
-  });
-  if (!res.ok) throw new Error(`Upsert failed: ${res.status} ${await res.text()}`);
+  const res = await fetch(
+    `${QDRANT_URL}/collections/${COLLECTION_NAME}/points`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ wait: true, points }),
+    },
+  );
+  if (!res.ok)
+    throw new Error(`Upsert failed: ${res.status} ${await res.text()}`);
   return points.length;
 }
 
@@ -165,16 +203,27 @@ function collectFiles(dir: string): string[] {
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
-await ensureCollection();
+async function main(): Promise<void> {
+  await ensureCollection();
 
-const files = targetFile ? [resolve(targetFile)] : collectFiles(resolve(targetDir!));
-console.log(`Ingesting ${files.length} files into collection '${COLLECTION_NAME}' as repo='${repoName}'...`);
+  const files = targetFile
+    ? [resolve(targetFile)]
+    : collectFiles(resolve(targetDir!));
+  console.log(
+    `Ingesting ${files.length} files into collection '${COLLECTION_NAME}' as repo='${repoName}'...`,
+  );
 
-let totalChunks = 0;
-for (const file of files) {
-  const n = await ingestFile(file);
-  if (n > 0) console.log(`  ✓ ${file} → ${n} chunks`);
-  totalChunks += n;
+  let totalChunks = 0;
+  for (const file of files) {
+    const n = await ingestFile(file);
+    if (n > 0) console.log(`  ✓ ${file} → ${n} chunks`);
+    totalChunks += n;
+  }
+
+  console.log(`Done. Total chunks ingested: ${totalChunks}`);
 }
 
-console.log(`Done. Total chunks ingested: ${totalChunks}`);
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
