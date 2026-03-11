@@ -1,0 +1,13 @@
+[
+  {
+    "repo": "bb-pay",
+    "dir": "C:/Dev/VS/BB.Pay",
+    "extensions": [".cs", ".ts", ".tsx", ".md", ".json", ".sql", ".csproj"],
+    "ignore": ["**/Migrations/**", "**/wwwroot/**"]
+  },
+  {
+    "repo": "qdrant-mcp",
+    "dir": "C:/Dev/VS/qdrant-mcp",
+    "extensions": [".ts", ".md", ".json"]
+  }
+]
