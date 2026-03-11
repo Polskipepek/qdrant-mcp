@@ -2,187 +2,7 @@
 
 A local RAG (Retrieval-Augmented Generation) stack that exposes Qdrant vector search and Ollama LLM tools directly to **GitHub Copilot Chat** in VS Code via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/).
 
----
-
-## User Stories & Acceptance Criteria
-
-### US-1 — Local infrastructure runs reliably
-**As a** developer,  
-**I want** Qdrant and Ollama to start automatically with Docker Compose,  
-**so that** I don't have to manage them manually.
-
-**Acceptance Criteria:**
-- [ ] `docker compose up -d` starts both `qdrant` (v1.17.0) and `ollama` containers
-- [ ] Qdrant is reachable at `http://localhost:6333`
-- [ ] Ollama is reachable at `http://localhost:11434`
-- [ ] Qdrant data persists in `qdrant_storage/` across container restarts
-- [ ] Ollama models persist in the `ollama_data` named volume across restarts
-- [ ] Both containers restart automatically unless explicitly stopped
-
-### US-2 — VS Code Copilot can interact with Qdrant
-**As a** developer,  
-**I want** Copilot Chat to manage Qdrant collections via MCP tools,  
-**so that** I can control the vector DB from chat without leaving VS Code.
-
-**Acceptance Criteria:**
-- [ ] `qdrant_health` returns Qdrant server version and status
-- [ ] `qdrant_list_collections` returns the list of existing collections
-- [ ] `qdrant_create_collection` creates a named collection with configurable vector size and distance metric
-- [ ] `qdrant_delete_collection` permanently removes a collection
-- [ ] All tools return a structured error message (not a crash) when Qdrant is unreachable
-
-### US-3 — VS Code Copilot can check Ollama health
-**As a** developer,  
-**I want** to verify that the Ollama runtime is healthy from chat,  
-**so that** I can diagnose issues before running RAG queries.
-
-**Acceptance Criteria:**
-- [ ] `ollama_health` returns a successful response when Ollama is running
-- [ ] `ollama_health` returns an error message (not a crash) when Ollama is unreachable
-
-### US-4 — Documents can be ingested into the vector DB
-**As a** developer,  
-**I want** to ingest text documents into Qdrant via Copilot Chat,  
-**so that** I can build a searchable knowledge base from my project docs.
-
-**Acceptance Criteria:**
-- [ ] `rag_ingest` accepts `collection`, `text`, optional `chunkSize`, and optional `metadata`
-- [ ] Text is split into overlapping chunks (10% overlap) of the specified `chunkSize` (default 500 chars)
-- [ ] Each chunk is embedded using the configured Ollama embedding model (`nomic-embed-text` by default)
-- [ ] Chunks are upserted into the specified Qdrant collection with `wait: true`
-- [ ] The tool reports how many chunks were ingested
-- [ ] Returns a structured error if Ollama or Qdrant is unreachable
-
-### US-5 — Semantic search works from Copilot Chat
-**As a** developer,  
-**I want** to search the knowledge base by natural language query,  
-**so that** I can quickly find relevant context without exact keyword matching.
-
-**Acceptance Criteria:**
-- [ ] `rag_search` accepts `collection`, `query`, and optional `topK` (default from env `SEARCH_TOP_K`)
-- [ ] The query is embedded with the same Ollama embedding model used at ingest time
-- [ ] Results are returned as ranked chunks with similarity scores
-- [ ] Returns "No results found." if the collection is empty
-- [ ] Returns a structured error if Ollama or Qdrant is unreachable
-
-### US-6 — Copilot can answer questions using local Llama
-**As a** developer,  
-**I want** Copilot to answer questions grounded in my own documents,  
-**so that** I get answers based on my codebase/docs rather than generic knowledge.
-
-**Acceptance Criteria:**
-- [ ] `rag_ask` accepts `collection`, `question`, and optional `topK`
-- [ ] Retrieves top-K relevant chunks from Qdrant
-- [ ] Passes retrieved context + question to the configured Ollama chat model (`llama3.2` by default)
-- [ ] Returns the generated answer plus source chunks as structured content
-- [ ] Returns "No relevant context found" when the collection is empty
-- [ ] Returns a structured error if Ollama or Qdrant is unreachable
-
----
-
-## Prerequisites
-
-- [Docker Desktop for Windows](https://www.docker.com/products/docker-desktop/) with WSL 2 backend
-- [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) (for RTX GPU passthrough to Ollama)
-- [Node.js](https://nodejs.org/) v22+
-- VS Code with [GitHub Copilot](https://marketplace.visualstudio.com/items?itemName=GitHub.copilot) extension
-
----
-
-## Setup
-
-### 1. Clone and configure
-
-```powershell
-git clone https://github.com/Polskipepek/qdrant-mcp.git
-cd qdrant-mcp
-copy .env.example .env
-```
-
-Edit `.env` if you want to change models or ports.
-
-### 2. Start infrastructure
-
-```powershell
-docker compose up -d
-```
-
-Verify both services:
-
-```powershell
-Invoke-RestMethod http://localhost:6333   # Qdrant
-Invoke-RestMethod http://localhost:11434  # Ollama
-```
-
-### 3. Pull Ollama models
-
-```powershell
-docker exec -it ollama ollama pull nomic-embed-text
-docker exec -it ollama ollama pull llama3.2
-```
-
-`nomic-embed-text` is the embedding model (768-dim). `llama3.2` is the smallest Llama 3 chat model and runs well on a consumer RTX GPU.
-
-### 4. Build the MCP server
-
-```powershell
-cd mcp-server
-npm install
-npm run build
-```
-
-### 5. Configure VS Code
-
-Press `Ctrl+Shift+P` → **MCP: Open User Configuration** and add:
-
-```json
-{
-  "servers": {
-    "qdrantGlobal": {
-      "type": "stdio",
-      "command": "C:\\Program Files\\nodejs\\node.exe",
-      "args": [
-        "C:\\path\\to\\qdrant-mcp\\mcp-server\\dist\\server.js"
-      ],
-      "env": {
-        "QDRANT_URL": "http://localhost:6333",
-        "OLLAMA_URL": "http://localhost:11434",
-        "EMBEDDING_MODEL": "nomic-embed-text",
-        "CHAT_MODEL": "llama3.2",
-        "SEARCH_TOP_K": "5"
-      }
-    }
-  }
-}
-```
-
-Then press `Ctrl+Shift+P` → **MCP: List Servers** → Start `qdrantGlobal`.
-
----
-
-## Available MCP Tools
-
-| Tool | Description |
-|---|---|
-| `qdrant_health` | Check Qdrant is reachable |
-| `ollama_health` | Check Ollama is reachable |
-| `qdrant_list_collections` | List all collections |
-| `qdrant_create_collection` | Create a collection with vector size + distance metric |
-| `qdrant_delete_collection` | Delete a collection permanently |
-| `rag_ingest` | Chunk + embed + upsert text into Qdrant |
-| `rag_search` | Semantic search returning ranked chunks |
-| `rag_ask` | Full RAG: retrieve context → generate answer with Llama |
-
----
-
-## Development
-
-For hot-reload during development:
-
-```powershell
-cd mcp-server
-npm run dev
-```
+All repositories share **one Qdrant collection** (`codebase` by default). Each chunk carries `repo`, `source`, `language`, and `branch` payload fields. Every search and answer tool can be scoped to a single repo or run across all repos at once.
 
 ---
 
@@ -197,5 +17,208 @@ VS Code Copilot Chat
     ├── generate()   ──►  Ollama :11434  (llama3.2)
     └── qdrant.*     ──►  Qdrant :6333
                                │
-                         qdrant_storage/
+                    shared collection 'codebase'
+                    payload fields: repo, source, language, branch
+                    payload indexes: repo ✓  source ✓  language ✓
+
+Auto-ingest paths:
+  git post-commit hook  ──►  scripts/ingest.ts  (per changed file)
+  scripts/watcher.ts   ──►  chokidar multi-dir watcher (on save)
+```
+
+---
+
+## User Stories & Acceptance Criteria
+
+### US-1 — Local infrastructure runs reliably
+**As a** developer, **I want** Qdrant and Ollama to start automatically with Docker Compose, **so that** I don't have to manage them manually.
+
+- [x] `docker compose up -d` starts `qdrant` (v1.17.0) and `ollama` containers
+- [x] Qdrant reachable at `http://localhost:6333`
+- [x] Ollama reachable at `http://localhost:11434`
+- [x] Data persists across container restarts
+- [x] Both containers restart unless explicitly stopped
+- [x] GPU passthrough for RTX cards via NVIDIA Container Toolkit
+
+### US-2 — VS Code Copilot can manage Qdrant
+- [x] `qdrant_health` returns version and status
+- [x] `ollama_health` returns Ollama status
+- [x] `qdrant_list_collections` lists collections
+- [x] `qdrant_create_collection` / `qdrant_delete_collection` manage collections
+- [x] All tools return structured errors on failure
+
+### US-3 — Shared collection with per-repo filtering
+**As a** developer working on multiple repos, **I want** all repos to share one Qdrant collection but be able to scope searches to a single repo, **so that** I have one DB to maintain but focused answers when needed.
+
+- [x] Single collection (`codebase`) stores chunks from all repos
+- [x] Each chunk has `repo`, `source`, `language`, `branch` payload fields
+- [x] Payload indexes on `repo`, `source`, `language` for fast filtered search
+- [x] `rag_search` and `rag_ask` accept optional `repo` parameter
+- [x] When `repo` is omitted, search spans all repos
+- [x] `rag_list_repos` returns distinct repo names in the collection
+- [x] `rag_delete_repo` removes all vectors for a given repo
+
+### US-4 — Documents ingested from Copilot Chat
+- [x] `rag_ingest` accepts `text`, `repo`, `source`, optional `language`, `branch`, `chunkSize`
+- [x] Text split into overlapping 500-char chunks (10% overlap)
+- [x] Each chunk embedded with `nomic-embed-text`
+- [x] Chunks upserted with `wait: true`
+- [x] Reports chunk count on completion
+
+### US-5 — Semantic search from Copilot Chat
+- [x] `rag_search` accepts `query`, optional `repo`, optional `topK`
+- [x] Results show score, repo name, and source file path
+- [x] Returns "No results found" on empty collection
+
+### US-6 — Copilot answers questions using local Llama
+- [x] `rag_ask` accepts `question`, optional `repo`, optional `topK`
+- [x] Retrieves top-K chunks, passes to `llama3.2` for generation
+- [x] Returns answer + sources as structured content
+
+### US-7 — Automatic ingestion on git commit (all repos)
+**As a** developer, **I want** changed files to be ingested automatically on every commit, **so that** the RAG DB always reflects my latest code without manual steps.
+
+- [x] `scripts/install-hooks.ps1` installs a global git `post-commit` hook on Windows
+- [x] `scripts/install-hooks.sh` installs the hook on Linux/macOS/WSL
+- [x] Hook reads changed files from `git diff-tree`, filters by extension, calls `scripts/ingest.ts --file`
+- [x] Ingestion runs in background (`&`) so commit is not blocked
+- [x] Works for every repo on the machine after `git init` is re-run
+
+### US-8 — Live file-save ingestion via watcher (multi-repo)
+**As a** developer, **I want** the RAG DB to update as I save files, **so that** Copilot always has the latest context even before I commit.
+
+- [x] `scripts/watcher.ts` watches multiple directories defined in `watcher-config.json`
+- [x] Debounces rapid saves (default 1500ms)
+- [x] Deletes stale vectors for a file before re-ingesting on change
+- [x] Removes vectors when a file is deleted
+- [x] Reads current git branch for each changed file
+- [x] `npm run watch` starts the daemon from `mcp-server/`
+
+---
+
+## Prerequisites
+
+- [Docker Desktop for Windows](https://www.docker.com/products/docker-desktop/) with WSL 2 backend
+- [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) (RTX GPU passthrough)
+- [Node.js](https://nodejs.org/) v22+
+- VS Code with [GitHub Copilot](https://marketplace.visualstudio.com/items?itemName=GitHub.copilot) extension
+
+---
+
+## Setup
+
+### 1. Clone and configure
+
+```powershell
+git clone https://github.com/Polskipepek/qdrant-mcp.git
+cd qdrant-mcp
+copy .env.example .env
+# Edit .env if needed
+```
+
+### 2. Start infrastructure
+
+```powershell
+docker compose up -d
+docker exec -it ollama ollama pull nomic-embed-text
+docker exec -it ollama ollama pull llama3.2
+```
+
+### 3. Build MCP server
+
+```powershell
+cd mcp-server
+npm install
+npm run build
+```
+
+### 4. Configure VS Code
+
+`Ctrl+Shift+P` → **MCP: Open User Configuration**:
+
+```json
+{
+  "servers": {
+    "qdrantGlobal": {
+      "type": "stdio",
+      "command": "C:\\Program Files\\nodejs\\node.exe",
+      "args": ["C:\\Dev\\VS\\qdrant-mcp\\mcp-server\\dist\\server.js"],
+      "env": {
+        "QDRANT_URL": "http://localhost:6333",
+        "OLLAMA_URL": "http://localhost:11434",
+        "EMBEDDING_MODEL": "nomic-embed-text",
+        "CHAT_MODEL": "llama3.2",
+        "COLLECTION_NAME": "codebase",
+        "VECTOR_SIZE": "768",
+        "SEARCH_TOP_K": "5"
+      }
+    }
+  }
+}
+```
+
+---
+
+## Auto-ingest setup
+
+### Option A — Git hook (ingest on commit)
+
+```powershell
+# Run once from qdrant-mcp root
+.\scripts\install-hooks.ps1
+
+# Then in each existing repo:
+cd C:\Dev\VS\BB.Pay
+git init   # copies hook from template
+```
+
+From now on, every `git commit` in any repo will automatically ingest changed files in the background.
+
+### Option B — File watcher (ingest on save)
+
+```powershell
+# 1. Copy and edit the config
+copy watcher-config.example.json watcher-config.json
+# Edit watcher-config.json with your repo paths
+
+# 2. Start the watcher
+cd mcp-server
+npm run watch
+```
+
+Run the watcher as a background process or Windows Service for always-on ingestion.
+
+### First-time bulk ingest
+
+```powershell
+cd mcp-server
+npm run ingest -- --dir C:\Dev\VS\BB.Pay --repo bb-pay
+npm run ingest -- --dir C:\Dev\VS\qdrant-mcp --repo qdrant-mcp
+```
+
+---
+
+## Available MCP Tools
+
+| Tool | Description | Key params |
+|---|---|---|
+| `qdrant_health` | Check Qdrant | — |
+| `ollama_health` | Check Ollama | — |
+| `qdrant_list_collections` | List collections | — |
+| `qdrant_create_collection` | Create collection | `name`, `size`, `distance` |
+| `qdrant_delete_collection` | Delete collection | `name` |
+| `rag_list_repos` | List ingested repos | — |
+| `rag_ingest` | Ingest text | `text`, `repo`, `source` |
+| `rag_delete_repo` | Remove all vectors for a repo | `repo` |
+| `rag_search` | Semantic search | `query`, `repo?`, `topK?` |
+| `rag_ask` | RAG answer with Llama | `question`, `repo?`, `topK?` |
+
+---
+
+## Development
+
+```powershell
+cd mcp-server
+npm run dev   # hot-reload MCP server via tsx
+npm run watch # start file watcher daemon
 ```
