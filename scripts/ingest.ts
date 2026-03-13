@@ -52,6 +52,9 @@ const IGNORE_DIRS = new Set([
   "coverage",
   ".vs",
   "__pycache__",
+  "android",
+  ".gradle",
+  "build",
 ]);
 
 // ---------------------------------------------------------------------------
@@ -100,15 +103,32 @@ const allowedExts = extArg
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function embed(text: string): Promise<number[]> {
-  const res = await fetch(`${OLLAMA_URL}/api/embeddings`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: EMBEDDING_MODEL, prompt: text }),
-  });
-  if (!res.ok) throw new Error(`Ollama embed failed: ${res.status}`);
-  const json = (await res.json()) as { embedding: number[] };
-  return json.embedding;
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const res = await fetch(`${OLLAMA_URL}/api/embeddings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: EMBEDDING_MODEL, prompt: text }),
+      });
+      if (!res.ok) throw new Error(`Ollama embed failed: ${res.status}`);
+      const json = (await res.json()) as { embedding: number[] };
+      return json.embedding;
+    } catch (err) {
+      if (attempt === maxAttempts) throw err;
+      const backoff = 500 * Math.pow(2, attempt - 1);
+      console.warn(
+        `Embedding attempt ${attempt} failed — retrying in ${backoff}ms: ${err}`,
+      );
+      await sleep(backoff);
+    }
+  }
+  throw new Error("Embedding failed after retries");
 }
 
 async function ensureCollection(): Promise<void> {
