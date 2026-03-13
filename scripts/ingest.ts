@@ -11,6 +11,7 @@
 import { readFileSync, readdirSync, statSync } from "fs";
 import { resolve, extname, join } from "path";
 import { execSync } from "child_process";
+import { randomUUID } from "crypto";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -107,6 +108,56 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Wait until Qdrant is reachable, retrying with exponential back-off.
+ * Exits the process if the service is still down after all attempts.
+ */
+async function waitForQdrant(maxAttempts = 10): Promise<void> {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const res = await fetch(`${QDRANT_URL}/healthz`);
+      if (res.ok) {
+        console.log("Qdrant is healthy.");
+        return;
+      }
+    } catch {
+      // service not yet reachable
+    }
+    const backoff = 1000 * Math.pow(2, attempt - 1);
+    console.warn(
+      `Qdrant not ready (attempt ${attempt}/${maxAttempts}) — retrying in ${backoff}ms...`,
+    );
+    await sleep(backoff);
+  }
+  console.error("ERROR: Qdrant did not become healthy in time.");
+  process.exit(1);
+}
+
+/**
+ * Wait until Ollama is reachable, retrying with exponential back-off.
+ * Exits the process if the service is still down after all attempts.
+ */
+async function waitForOllama(maxAttempts = 10): Promise<void> {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const res = await fetch(OLLAMA_URL);
+      if (res.ok) {
+        console.log("Ollama is healthy.");
+        return;
+      }
+    } catch {
+      // service not yet reachable
+    }
+    const backoff = 1000 * Math.pow(2, attempt - 1);
+    console.warn(
+      `Ollama not ready (attempt ${attempt}/${maxAttempts}) — retrying in ${backoff}ms...`,
+    );
+    await sleep(backoff);
+  }
+  console.error("ERROR: Ollama did not become healthy in time.");
+  process.exit(1);
+}
+
 async function embed(text: string): Promise<number[]> {
   const maxAttempts = 3;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -176,10 +227,10 @@ async function ingestFile(filePath: string): Promise<number> {
   const source = filePath;
 
   const points = await Promise.all(
-    chunks.map(async (chunk, index) => {
+    chunks.map(async (chunk) => {
       const vector = await embed(chunk);
       return {
-        id: Date.now() * 1000 + index,
+        id: randomUUID(),
         vector,
         payload: {
           text: chunk,
@@ -224,6 +275,10 @@ function collectFiles(dir: string): string[] {
 // Main
 // ---------------------------------------------------------------------------
 async function main(): Promise<void> {
+  // Verify services are up before doing any work
+  await waitForQdrant();
+  await waitForOllama();
+
   await ensureCollection();
 
   const files = targetFile
@@ -234,13 +289,38 @@ async function main(): Promise<void> {
   );
 
   let totalChunks = 0;
+  const failedFiles: string[] = [];
+
   for (const file of files) {
-    const n = await ingestFile(file);
-    if (n > 0) console.log(`  ✓ ${file} → ${n} chunks`);
-    totalChunks += n;
+    const maxRetries = 3;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const n = await ingestFile(file);
+        if (n > 0) console.log(`  ✓ ${file} → ${n} chunks`);
+        totalChunks += n;
+        break;
+      } catch (err) {
+        if (attempt < maxRetries) {
+          const backoff = 500 * Math.pow(2, attempt - 1);
+          console.warn(
+            `  ⚠ ${file} — attempt ${attempt}/${maxRetries} failed, retrying in ${backoff}ms: ${err}`,
+          );
+          await sleep(backoff);
+        } else {
+          console.error(`  ✗ ${file} — failed after ${maxRetries} attempts: ${err}`);
+          failedFiles.push(file);
+        }
+      }
+    }
   }
 
   console.log(`Done. Total chunks ingested: ${totalChunks}`);
+
+  if (failedFiles.length > 0) {
+    console.error(`\nFailed to ingest ${failedFiles.length} file(s):`);
+    for (const f of failedFiles) console.error(`  - ${f}`);
+    process.exit(1);
+  }
 }
 
 main().catch((err) => {
