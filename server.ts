@@ -6,8 +6,8 @@ import { z } from "zod";
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
-const QDRANT_URL = process.env.QDRANT_URL ?? "http://localhost:6333";
-const OLLAMA_URL = process.env.OLLAMA_URL ?? "http://localhost:11434";
+const QDRANT_URL = process.env.QDRANT_URL ?? "http://127.0.0.1:6333";
+const OLLAMA_URL = process.env.OLLAMA_URL ?? "http://127.0.0.1:11434";
 const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL ?? "nomic-embed-text";
 const CHAT_MODEL = process.env.CHAT_MODEL ?? "llama3.2";
 const COLLECTION_NAME = process.env.COLLECTION_NAME ?? "codebase";

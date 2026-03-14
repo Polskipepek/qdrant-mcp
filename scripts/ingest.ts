@@ -16,8 +16,8 @@ import { randomUUID } from "crypto";
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
-const QDRANT_URL = process.env.QDRANT_URL ?? "http://localhost:6333";
-const OLLAMA_URL = process.env.OLLAMA_URL ?? "http://localhost:11434";
+const QDRANT_URL = process.env.QDRANT_URL ?? "http://127.0.0.1:6333";
+const OLLAMA_URL = process.env.OLLAMA_URL ?? "http://127.0.0.1:11434";
 const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL ?? "nomic-embed-text";
 const COLLECTION_NAME = process.env.COLLECTION_NAME ?? "codebase";
 const VECTOR_SIZE = parseInt(process.env.VECTOR_SIZE ?? "768", 10);
@@ -112,7 +112,7 @@ function sleep(ms: number) {
  * Wait until Qdrant is reachable, retrying with exponential back-off.
  * Exits the process if the service is still down after all attempts.
  */
-async function waitForQdrant(maxAttempts = 10): Promise<void> {
+async function waitForQdrant(maxAttempts = 6): Promise<void> {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       const res = await fetch(`${QDRANT_URL}/healthz`);
@@ -137,7 +137,7 @@ async function waitForQdrant(maxAttempts = 10): Promise<void> {
  * Wait until Ollama is reachable, retrying with exponential back-off.
  * Exits the process if the service is still down after all attempts.
  */
-async function waitForOllama(maxAttempts = 10): Promise<void> {
+async function waitForOllama(maxAttempts = 6): Promise<void> {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       const res = await fetch(OLLAMA_URL);
@@ -307,7 +307,9 @@ async function main(): Promise<void> {
           );
           await sleep(backoff);
         } else {
-          console.error(`  ✗ ${file} — failed after ${maxRetries} attempts: ${err}`);
+          console.error(
+            `  ✗ ${file} — failed after ${maxRetries} attempts: ${err}`,
+          );
           failedFiles.push(file);
         }
       }
