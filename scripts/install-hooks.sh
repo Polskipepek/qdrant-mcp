@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # install-hooks.sh
 # Installs a global git post-commit hook on Linux/macOS/WSL.
-# Usage: bash scripts/install-hooks.sh [/path/to/mcp-server]
+# Usage: bash scripts/install-hooks.sh [/path/to/qdrant-mcp]
 
 set -e
 
-MCP_SERVER_DIR="${1:-$(realpath "$(dirname "$0")/../mcp-server")}"
+MCP_SERVER_DIR="${1:-$(realpath "$(dirname "$0")/..")}" 
 TEMPLATE_DIR="$HOME/.git-templates/hooks"
 
 mkdir -p "$TEMPLATE_DIR"
@@ -25,7 +25,7 @@ for FILE in \$CHANGED_FILES; do
     cs|ts|tsx|js|jsx|md|txt|json|yaml|yml|sql|csproj)
       FULL_PATH="\$(git rev-parse --show-toplevel)/\$FILE"
       if [ -f "\$FULL_PATH" ]; then
-        node "\$MCP_SERVER/node_modules/.bin/tsx" "\$MCP_SERVER/../scripts/ingest.ts" \\
+        node "\$MCP_SERVER/node_modules/.bin/tsx" "\$MCP_SERVER/scripts/ingest.ts" \\
           --file "\$FULL_PATH" \\
           --repo "\$REPO_NAME" \\
           --branch "\$(git rev-parse --abbrev-ref HEAD)" &

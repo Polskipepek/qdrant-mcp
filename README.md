@@ -92,7 +92,7 @@ Auto-ingest paths:
 - [x] Deletes stale vectors for a file before re-ingesting on change
 - [x] Removes vectors when a file is deleted
 - [x] Reads current git branch for each changed file
-- [x] `npm run watch` starts the daemon from `mcp-server/`
+- [x] `npm run watch` starts the daemon from project root
 
 ---
 
@@ -127,7 +127,6 @@ docker exec -it ollama ollama pull llama3.2
 ### 3. Build MCP server
 
 ```powershell
-cd mcp-server
 npm install
 npm run build
 ```
@@ -142,7 +141,7 @@ npm run build
     "qdrantGlobal": {
       "type": "stdio",
       "command": "C:\\Program Files\\nodejs\\node.exe",
-      "args": ["C:\\Dev\\VS\\qdrant-mcp\\mcp-server\\dist\\server.js"],
+      "args": ["C:\\Dev\\VS\\qdrant-mcp\\dist\\server.js"],
       "env": {
         "QDRANT_URL": "http://localhost:6333",
         "OLLAMA_URL": "http://localhost:11434",
@@ -182,7 +181,6 @@ copy watcher-config.example.json watcher-config.json
 # Edit watcher-config.json with your repo paths
 
 # 2. Start the watcher
-cd mcp-server
 npm run watch
 ```
 
@@ -191,7 +189,6 @@ Run the watcher as a background process or Windows Service for always-on ingesti
 ### First-time bulk ingest
 
 ```powershell
-cd mcp-server
 npm run ingest -- --dir C:\Dev\VS\BB.Pay --repo bb-pay
 npm run ingest -- --dir C:\Dev\VS\qdrant-mcp --repo qdrant-mcp
 ```
@@ -218,7 +215,6 @@ npm run ingest -- --dir C:\Dev\VS\qdrant-mcp --repo qdrant-mcp
 ## Development
 
 ```powershell
-cd mcp-server
 npm run dev   # hot-reload MCP server via tsx
 npm run watch # start file watcher daemon
 ```

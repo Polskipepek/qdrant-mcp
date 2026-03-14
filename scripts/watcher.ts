@@ -3,7 +3,7 @@
  * File watcher daemon — watches multiple repo directories and auto-ingests
  * changed files into the shared Qdrant collection.
  *
- * Configure watched repos in watcher-config.json next to this file.
+ * Configure watched repos in watcher-config.json at project root.
  *
  * Usage:
  *   tsx scripts/watcher.ts

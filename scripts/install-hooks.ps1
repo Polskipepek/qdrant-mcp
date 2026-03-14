@@ -4,10 +4,10 @@
 #
 # Usage:
 #   .\scripts\install-hooks.ps1
-#   .\scripts\install-hooks.ps1 -McpServerDir "D:\dev\ai\qdrant-mcp\mcp-server"
+#   .\scripts\install-hooks.ps1 -McpServerDir "D:\dev\ai\qdrant-mcp"
 
 param(
-  [string]$McpServerDir = (Resolve-Path "$PSScriptRoot/../mcp-server")
+  [string]$McpServerDir = (Resolve-Path "$PSScriptRoot/..")
 )
 
 $templateDir = "$env:USERPROFILE\.git-templates\hooks"
@@ -34,7 +34,7 @@ for FILE in `$CHANGED_FILES; do
     cs|ts|tsx|js|jsx|md|txt|json|yaml|yml|sql|csproj)
       FULL_PATH="`$(git rev-parse --show-toplevel)/`$FILE"
       if [ -f "`$FULL_PATH" ]; then
-        node "`$MCP_SERVER/node_modules/.bin/tsx" "`$MCP_SERVER/../scripts/ingest.ts" \\
+        node "`$MCP_SERVER/node_modules/.bin/tsx" "`$MCP_SERVER/scripts/ingest.ts" \\
           --file "`$FULL_PATH" \\
           --repo "`$REPO_NAME" \\
           --branch "`$(git rev-parse --abbrev-ref HEAD)" &
